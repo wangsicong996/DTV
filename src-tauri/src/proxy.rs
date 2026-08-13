@@ -7,9 +7,14 @@ use crate::net_proxy::DtvProxyExt;
 use serde::Deserialize;
 use std::io::ErrorKind;
 use std::net::TcpStream;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, State};
+use tokio::sync::Semaphore;
+
+// 这是本机 HTTP 反代（直播 FLV / 封面防盗链），不是系统 SOCKS 代理。
+// 播放器只访问 127.0.0.1；这里再去拉上游时会走 --proxy-server。
+// SOCKS 下不要反复启停 Actix：非优雅关闭正在转发的流会把 native-tls 打崩（段错误）。
 
 // Define a struct to hold the server handle in a Tauri managed state
 #[derive(Default)]
@@ -18,6 +23,12 @@ pub struct ProxyServerHandle(pub StdMutex<Option<ServerHandle>>);
 // Align with pure_live-master's Huya playback UA
 const HUYA_HYSDK_UA: &str =
     "HYSDK(Windows,30000002)_APP(pc_exe&7080000&official)_SDK(trans&2.34.0.5795)";
+
+static IMAGE_SEM: OnceLock<Semaphore> = OnceLock::new();
+
+fn image_sem() -> &'static Semaphore {
+    IMAGE_SEM.get_or_init(|| Semaphore::new(8))
+}
 
 async fn find_free_port() -> u16 {
     // Using a fixed port as requested by the user for easier debugging
@@ -38,6 +49,11 @@ async fn image_proxy_handler(
         return HttpResponse::BadRequest().body("Missing url query parameter");
     }
 
+    let _permit = match image_sem().acquire().await {
+        Ok(permit) => permit,
+        Err(_) => return HttpResponse::ServiceUnavailable().body("image proxy unavailable"),
+    };
+
     let mut req = client
         .get(&url)
         .header(
@@ -54,11 +70,17 @@ async fn image_proxy_handler(
         req = req
             .header("Referer", "https://live.bilibili.com/")
             .header("Origin", "https://live.bilibili.com");
-    } else if url.contains("huya.com") {
+    } else if url.contains("huya.com")
+        || url.contains("msstatic.com")
+        || url.contains("huyaimg.com")
+        || url.contains("hy-cdn.com")
+    {
         req = req
             .header("Referer", "https://www.huya.com/")
             .header("Origin", "https://www.huya.com");
-    } else if url.contains("douyin") || url.contains("douyinpic.com") {
+    } else if url.contains("douyu.com") || url.contains("douyucdn") {
+        req = req.header("Referer", "https://www.douyu.com/");
+    } else if url.contains("douyin") || url.contains("douyinpic.com") || url.contains("byteimg") {
         req = req.header("Referer", "https://www.douyin.com/");
     }
 
@@ -357,6 +379,7 @@ async fn flv_proxy_handler(
 
     let mut req = client
         .get(&url)
+        .timeout(Duration::from_secs(7200))
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .header("Accept", "video/x-flv,application/octet-stream,*/*")
         .header("Range", "bytes=0-")
@@ -443,15 +466,14 @@ pub async fn start_proxy(
         return Err("Stream URL is not set in store. Cannot start proxy.".to_string());
     }
 
-    // stream_url_data_for_actix can be created once and cloned, as StreamUrlStore is Arc based and Send + Sync
+    let proxy_url = format!("http://127.0.0.1:{}/live.flv", port);
+    // 切房间只更新 StreamUrlStore，复用已在听的反代。反复 stop/bind 会打爆 SOCKS。
+    if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        return Ok(proxy_url);
+    }
+
     let stream_url_data_for_actix = web::Data::new(stream_url_store.inner().clone());
     let app_data_reqwest_client = web::Data::new(build_flv_proxy_client()?);
-
-    // Ensure MutexGuard is dropped before .await
-    let existing_handle_to_stop = { server_handle_state.0.lock().unwrap().take() };
-    if let Some(existing_handle) = existing_handle_to_stop {
-        existing_handle.stop(false).await;
-    }
 
     let server = match HttpServer::new(move || {
         App::new()
@@ -463,11 +485,15 @@ pub async fn start_proxy(
             .route("/hls", web::get().to(hls_proxy_handler))
             .route("/hls-seg", web::get().to(hls_seg_proxy_handler))
     })
+    .workers(2)
     .keep_alive(Duration::from_secs(120))
     .bind(("127.0.0.1", port))
     {
         Ok(srv) => srv,
         Err(e) => {
+            if e.kind() == ErrorKind::AddrInUse {
+                return Ok(proxy_url);
+            }
             let err_msg = format!(
                 "[Rust/proxy.rs] Failed to bind server to port {}: {}",
                 port, e
@@ -490,7 +516,6 @@ pub async fn start_proxy(
         }
     });
 
-    let proxy_url = format!("http://127.0.0.1:{}/live.flv", port);
     Ok(proxy_url)
 }
 
@@ -520,6 +545,7 @@ pub async fn start_static_proxy_server(
             .route("/hls", web::get().to(hls_proxy_handler))
             .route("/hls-seg", web::get().to(hls_seg_proxy_handler))
     })
+    .workers(2)
     .keep_alive(Duration::from_secs(120))
     .bind(("127.0.0.1", port))
     {
@@ -557,15 +583,8 @@ pub async fn start_static_proxy_server(
 }
 
 #[tauri::command]
-pub async fn stop_proxy(server_handle_state: State<'_, ProxyServerHandle>) -> Result<(), String> {
-    // Ensure MutexGuard is dropped before .await
-    let handle_to_stop = { server_handle_state.0.lock().unwrap().take() };
-
-    if let Some(handle) = handle_to_stop {
-        handle.stop(false).await; // Changed to non-graceful shutdown
-        println!("[Rust/proxy.rs] stop_proxy: Initiated non-graceful shutdown.");
-    } else {
-        println!("[Rust/proxy.rs] stop_proxy command: No proxy server was running or handle already taken.");
-    }
+pub async fn stop_proxy(_server_handle_state: State<'_, ProxyServerHandle>) -> Result<(), String> {
+    // Keep the local reverse proxy running. Restarting Actix workers on every
+    // room switch exhausted SOCKS connections and segfaulted native-tls.
     Ok(())
 }
