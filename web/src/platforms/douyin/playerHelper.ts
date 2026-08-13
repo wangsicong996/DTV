@@ -5,6 +5,7 @@ import { Platform } from '../common/types';
 import type { DanmakuMessage, DanmuOverlayInstance, DanmuRenderOptions, RustGetStreamUrlPayload } from '../../components/player/types';
 import type { LiveStreamInfo } from '../common/types';
 import { v4 as uuidv4 } from 'uuid';
+import { isHlsUrl, wrapHlsPlayUrl } from '../common/hlsProxy';
 
 
 export interface DouyinRustDanmakuPayload {
@@ -24,7 +25,8 @@ export async function fetchAndPrepareDouyinStreamConfig(roomId: string, quality:
   isLive: boolean; 
   normalizedRoomId?: string | null;
   webRid?: string | null;
-  initialError: string | null; // Made non-optional, will always be string or null
+  initialError: string | null;
+  hlsUpstream?: string;
 }> {
   if (!roomId) {
     return {
@@ -115,9 +117,21 @@ export async function fetchAndPrepareDouyinStreamConfig(roomId: string, quality:
 
       if (rawStreamUrl.startsWith('http://127.0.0.1') && rawStreamUrl.endsWith('/live.flv')) {
         streamType = 'flv';
-      } else if (rawStreamUrl.includes('pull-hls') || rawStreamUrl.endsWith('.m3u8')) {
-        console.warn(`[DouyinPlayerHelper] Received HLS-like stream URL (${rawStreamUrl}), but expected flv. Overriding to flv.`);
-        streamType = 'flv';
+      } else if (isHlsUrl(rawStreamUrl)) {
+        streamType = 'hls';
+        const wrapped = await wrapHlsPlayUrl(sanitizedStreamUrl);
+        return {
+          streamUrl: wrapped.playUrl,
+          streamType,
+          title: result.title,
+          anchorName: result.anchor_name,
+          avatar: result.avatar,
+          isLive: true,
+          normalizedRoomId: result.normalized_room_id ?? null,
+          webRid: result.web_rid ?? null,
+          initialError: null,
+          hlsUpstream: wrapped.upstream,
+        };
       } else if (rawStreamUrl.includes('pull-flv') || rawStreamUrl.includes('.flv')) {
         streamType = 'flv';
       } else {

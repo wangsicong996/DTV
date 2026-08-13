@@ -1,6 +1,7 @@
 use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use crate::net_proxy::DtvProxyExt;
 // Structs expected by the frontend
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FrontendCate3Item {
@@ -155,7 +156,7 @@ async fn fetch_categories_douyu_raw() -> Result<Vec<RawFrontendCate1Item>, Strin
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let url = "https://m.douyu.com/api/cate/list";

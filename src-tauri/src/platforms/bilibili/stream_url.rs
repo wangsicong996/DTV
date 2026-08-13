@@ -5,6 +5,7 @@ use tauri::{command, AppHandle, State};
 use crate::platforms::common::types::StreamVariant;
 use crate::proxy::{start_proxy, ProxyServerHandle};
 use crate::StreamUrlStore;
+use crate::net_proxy::DtvProxyExt;
 
 #[command]
 pub async fn get_bilibili_live_stream_url_with_quality(
@@ -66,7 +67,7 @@ pub async fn get_bilibili_live_stream_url_with_quality(
         .default_headers(headers)
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 
@@ -525,17 +526,10 @@ pub async fn get_bilibili_live_stream_url_with_quality(
             })
         }
         SelectedStream::Hls(real_url) => {
-            // HLS：无需本地代理，若存在旧的 FLV 代理则关闭并清空存储
-            {
-                let handle_to_stop = { proxy_server_handle.0.lock().unwrap().take() };
-                if let Some(handle) = handle_to_stop {
-                    handle.stop(false).await;
-                    eprintln!("[Bilibili] Stopped existing FLV proxy before using HLS stream");
-                }
-            }
+            // HLS 由前端/本机 /hls 反代播放，不要关掉静态反代。
             {
                 let mut current_url_in_store = stream_url_store.url.lock().unwrap();
-                *current_url_in_store = String::new();
+                *current_url_in_store = real_url.clone();
             }
 
             Ok(crate::platforms::common::LiveStreamInfo {

@@ -4,6 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use crate::net_proxy::DtvProxyExt;
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36";
 // 部分平台（如抖音）接口在网络抖动时响应较慢，20s 容易触发超时。
@@ -72,8 +73,7 @@ impl HttpClient {
         })
     }
 
-    /// 创建一个绕过所有代理的直连HTTP客户端
-    /// 这个客户端将忽略系统代理设置，直接连接到目标服务器
+    /// 不使用系统代理。若启动时指定了 `--proxy-server` / `DTV_PROXY`，则走该代理。
     pub fn new_direct_connection() -> Result<Self, String> {
         let mut default_headers = ReqwestHeaderMap::new();
         default_headers.insert(
@@ -89,7 +89,7 @@ impl HttpClient {
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
             .connect_timeout(Duration::from_secs(15))
             .cookie_provider(cookie_jar)
-            .no_proxy(); // 关键：禁用所有代理设置
+            .dtv_proxy(); // 关键：禁用所有代理设置
 
         let inner_client = client_builder
             .build()
@@ -101,7 +101,7 @@ impl HttpClient {
         })
     }
 
-    /// 直连 + 限制连接池规模，用于关注刷新等低并发任务
+    /// 限制连接池规模，用于关注刷新等低并发任务
     pub fn new_direct_limited(max_idle_per_host: usize) -> Result<Self, String> {
         let mut default_headers = ReqwestHeaderMap::new();
         default_headers.insert(
@@ -117,7 +117,7 @@ impl HttpClient {
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
             .connect_timeout(Duration::from_secs(15))
             .cookie_provider(cookie_jar)
-            .no_proxy()
+            .dtv_proxy()
             .pool_max_idle_per_host(max_idle_per_host)
             .pool_idle_timeout(Duration::from_secs(FOLLOW_POOL_IDLE_TIMEOUT_SECONDS));
 

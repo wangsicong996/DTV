@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use crate::net_proxy::DtvProxyExt;
 
 #[derive(Default, Clone)]
 pub struct BilibiliState {
@@ -21,7 +22,7 @@ pub async fn generate_bilibili_w_webid(
         .user_agent(ua)
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 

@@ -6,6 +6,7 @@ use reqwest::{
     Client,
 };
 use std::time::{SystemTime, UNIX_EPOCH}; // For timestamp for did // For URL encoding keyword
+use crate::net_proxy::DtvProxyExt;
 
 // Renamed from search_anchor to avoid ambiguity with Tauri command
 pub async fn perform_anchor_search(keyword: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -17,7 +18,7 @@ pub async fn perform_anchor_search(keyword: &str) -> Result<String, Box<dyn std:
 
     let client = Client::builder()
         .redirect(Policy::limited(10))
-        .no_proxy()
+        .dtv_proxy()
         .default_headers(default_headers)
         .build()?;
 

@@ -10,6 +10,7 @@ use serde_json::Value;
 #[cfg(target_os = "linux")]
 use std::sync::Once;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::net_proxy::DtvProxyExt;
 
 #[derive(Deserialize, Debug)]
 struct BetardRoomInfo {
@@ -100,7 +101,7 @@ impl DouYu {
         );
         let client = Client::builder()
             .redirect(Policy::limited(10))
-            .no_proxy()
+            .dtv_proxy()
             .default_headers(default_headers)
             .build()?;
 

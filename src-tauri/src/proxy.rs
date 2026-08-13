@@ -3,6 +3,7 @@ use futures_util::TryStreamExt;
 use reqwest::Client;
 // awc removed for now due to API differences; using reqwest streaming
 use crate::StreamUrlStore;
+use crate::net_proxy::DtvProxyExt;
 use serde::Deserialize;
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -117,6 +118,227 @@ async fn image_proxy_handler(
     }
 }
 
+fn hls_referer_headers(url: &str) -> (&'static str, &'static str) {
+    if url.contains("huya.com") || url.contains("hy-cdn.com") || url.contains("huyaimg.com") {
+        ("https://www.huya.com/", "https://www.huya.com")
+    } else if url.contains("douyu.com") || url.contains("douyucdn") {
+        ("https://www.douyu.com/", "https://www.douyu.com")
+    } else if url.contains("douyin") || url.contains("byteimg") {
+        ("https://www.douyin.com/", "https://www.douyin.com")
+    } else {
+        ("https://live.bilibili.com/", "https://live.bilibili.com")
+    }
+}
+
+fn resolve_hls_uri(playlist_url: &url::Url, uri: &str) -> String {
+    let trimmed = uri.trim();
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    if let Ok(abs) = url::Url::parse(trimmed) {
+        return abs.to_string();
+    }
+    playlist_url
+        .join(trimmed)
+        .map(|u| u.to_string())
+        .unwrap_or_else(|_| trimmed.to_string())
+}
+
+fn wrap_hls_uri(proxy_base: &str, playlist: bool, abs: &str) -> String {
+    let path = if playlist { "hls" } else { "hls-seg" };
+    format!(
+        "{proxy_base}/{path}?url={}",
+        urlencoding::encode(abs)
+    )
+}
+
+fn rewrite_tag_uris(line: &str, playlist_url: &url::Url, proxy_base: &str, as_playlist: bool) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(idx) = rest.find("URI=\"") {
+        out.push_str(&rest[..idx]);
+        out.push_str("URI=\"");
+        rest = &rest[idx + 5..];
+        if let Some(end) = rest.find('"') {
+            let uri = &rest[..end];
+            let abs = resolve_hls_uri(playlist_url, uri);
+            let looks_playlist = as_playlist || abs.contains(".m3u8");
+            out.push_str(&wrap_hls_uri(proxy_base, looks_playlist, &abs));
+            out.push('"');
+            rest = &rest[end + 1..];
+        } else {
+            out.push_str(rest);
+            return out;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn rewrite_hls_playlist(body: &str, playlist_url: &str, proxy_base: &str) -> String {
+    let Ok(base) = url::Url::parse(playlist_url) else {
+        return body.to_string();
+    };
+    let mut out = String::with_capacity(body.len() + 64);
+    let mut next_is_playlist = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            next_is_playlist = trimmed.starts_with("#EXT-X-STREAM-INF");
+            if trimmed.contains("URI=\"") {
+                let as_playlist = trimmed.starts_with("#EXT-X-MEDIA")
+                    || trimmed.starts_with("#EXT-X-I-FRAME-STREAM-INF")
+                    || trimmed.starts_with("#EXT-X-SESSION-DATA");
+                out.push_str(&rewrite_tag_uris(trimmed, &base, proxy_base, as_playlist));
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+            continue;
+        }
+        let abs = resolve_hls_uri(&base, trimmed);
+        let playlist = next_is_playlist || abs.contains(".m3u8");
+        next_is_playlist = false;
+        out.push_str(&wrap_hls_uri(proxy_base, playlist, &abs));
+        out.push('\n');
+    }
+    out
+}
+
+async fn hls_proxy_handler(
+    req: HttpRequest,
+    query: web::Query<ImageQuery>,
+    client: web::Data<Client>,
+) -> impl Responder {
+    let url = query.url.clone();
+    if url.is_empty() {
+        return HttpResponse::BadRequest().body("Missing url query parameter");
+    }
+    let (referer, origin) = hls_referer_headers(&url);
+    match client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Accept", "application/vnd.apple.mpegurl,application/x-mpegURL,*/*")
+        .header("Referer", referer)
+        .header("Origin", origin)
+        .send()
+        .await
+    {
+        Ok(upstream) => {
+            if !upstream.status().is_success() {
+                let status = upstream.status();
+                let body = upstream.text().await.unwrap_or_default();
+                let actix_status = actix_web::http::StatusCode::from_u16(status.as_u16())
+                    .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+                return HttpResponse::build(actix_status).body(format!(
+                    "Error fetching HLS playlist {}: {}. {}",
+                    url, status, body
+                ));
+            }
+            match upstream.text().await {
+                Ok(body) => {
+                    let conn = req.connection_info();
+                    let proxy_base = format!("http://{}", conn.host());
+                    let rewritten = rewrite_hls_playlist(&body, &url, &proxy_base);
+                    HttpResponse::Ok()
+                        .content_type("application/vnd.apple.mpegurl")
+                        .insert_header(("Cache-Control", "no-store"))
+                        .body(rewritten)
+                }
+                Err(e) => HttpResponse::InternalServerError()
+                    .body(format!("Failed to read HLS playlist: {e}")),
+            }
+        }
+        Err(e) => HttpResponse::InternalServerError()
+            .body(format!("Error connecting to upstream HLS playlist {url}: {e}")),
+    }
+}
+
+async fn hls_seg_proxy_handler(
+    query: web::Query<ImageQuery>,
+    client: web::Data<Client>,
+) -> impl Responder {
+    let url = query.url.clone();
+    if url.is_empty() {
+        return HttpResponse::BadRequest().body("Missing url query parameter");
+    }
+    let (referer, origin) = hls_referer_headers(&url);
+    match client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Accept", "*/*")
+        .header("Referer", referer)
+        .header("Origin", origin)
+        .send()
+        .await
+    {
+        Ok(upstream) => {
+            if !upstream.status().is_success() {
+                let status = upstream.status();
+                let body = upstream.text().await.unwrap_or_default();
+                let actix_status = actix_web::http::StatusCode::from_u16(status.as_u16())
+                    .unwrap_or(actix_web::http::StatusCode::BAD_GATEWAY);
+                return HttpResponse::build(actix_status)
+                    .body(format!("Error fetching HLS segment {url}: {status}. {body}"));
+            }
+            let content_type = upstream
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let mut response_builder = HttpResponse::Ok();
+            response_builder
+                .content_type(content_type)
+                .insert_header(("Cache-Control", "no-store"));
+            let byte_stream = upstream.bytes_stream().map_err(|e| {
+                eprintln!("[Rust/proxy.rs hls-seg] upstream stream error: {e}");
+                actix_web::error::ErrorInternalServerError(format!("Upstream stream error: {e}"))
+            });
+            response_builder.streaming(byte_stream)
+        }
+        Err(e) => HttpResponse::InternalServerError()
+            .body(format!("Error connecting to upstream HLS segment {url}: {e}")),
+    }
+}
+
+fn build_image_proxy_client() -> Result<Client, String> {
+    Client::builder()
+        .dtv_proxy()
+        .http1_only()
+        .gzip(false)
+        .brotli(false)
+        .no_deflate()
+        .pool_idle_timeout(Duration::from_secs(15))
+        .pool_max_idle_per_host(2)
+        .tcp_keepalive(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("failed to build image proxy client: {e}"))
+}
+
+fn build_flv_proxy_client() -> Result<Client, String> {
+    Client::builder()
+        .dtv_proxy()
+        .http1_only()
+        .gzip(false)
+        .brotli(false)
+        .no_deflate()
+        .pool_idle_timeout(Duration::from_secs(15))
+        .pool_max_idle_per_host(1)
+        .tcp_keepalive(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(7200))
+        .build()
+        .map_err(|e| format!("failed to build flv proxy client: {e}"))
+}
+
 // Your actual proxy logic - this is a simplified placeholder
 async fn flv_proxy_handler(
     _req: HttpRequest,
@@ -223,7 +445,7 @@ pub async fn start_proxy(
 
     // stream_url_data_for_actix can be created once and cloned, as StreamUrlStore is Arc based and Send + Sync
     let stream_url_data_for_actix = web::Data::new(stream_url_store.inner().clone());
-    // REMOVED: let awc_client_for_actix = web::Data::new(Client::default());
+    let app_data_reqwest_client = web::Data::new(build_flv_proxy_client()?);
 
     // Ensure MutexGuard is dropped before .await
     let existing_handle_to_stop = { server_handle_state.0.lock().unwrap().take() };
@@ -232,28 +454,14 @@ pub async fn start_proxy(
     }
 
     let server = match HttpServer::new(move || {
-        let app_data_stream_url = stream_url_data_for_actix.clone();
-        // Create reqwest::Client inside the closure for each worker thread (for images)
-        let app_data_reqwest_client = web::Data::new(
-            Client::builder()
-                .no_proxy()
-                .http1_only()
-                .gzip(false)
-                .brotli(false)
-                .no_deflate()
-                .pool_idle_timeout(None)
-                .pool_max_idle_per_host(4)
-                .tcp_keepalive(Duration::from_secs(60))
-                .timeout(Duration::from_secs(7200))
-                .build()
-                .expect("failed to build client"),
-        );
         App::new()
-            .app_data(app_data_stream_url)
-            .app_data(app_data_reqwest_client)
+            .app_data(stream_url_data_for_actix.clone())
+            .app_data(app_data_reqwest_client.clone())
             .wrap(actix_cors::Cors::permissive())
             .route("/live.flv", web::get().to(flv_proxy_handler))
             .route("/image", web::get().to(image_proxy_handler))
+            .route("/hls", web::get().to(hls_proxy_handler))
+            .route("/hls-seg", web::get().to(hls_seg_proxy_handler))
     })
     .keep_alive(Duration::from_secs(120))
     .bind(("127.0.0.1", port))
@@ -300,29 +508,17 @@ pub async fn start_static_proxy_server(
     }
 
     let stream_url_data_for_actix = web::Data::new(stream_url_store.inner().clone());
+    let app_data_reqwest_client = web::Data::new(build_image_proxy_client()?);
 
     let server = match HttpServer::new(move || {
-        let app_data_stream_url = stream_url_data_for_actix.clone();
-        let app_data_reqwest_client = web::Data::new(
-            Client::builder()
-                .no_proxy()
-                .http1_only()
-                .gzip(false)
-                .brotli(false)
-                .no_deflate()
-                .pool_idle_timeout(None)
-                .pool_max_idle_per_host(4)
-                .tcp_keepalive(Duration::from_secs(60))
-                .timeout(Duration::from_secs(7200))
-                .build()
-                .expect("failed to build client"),
-        );
         App::new()
-            .app_data(app_data_stream_url)
-            .app_data(app_data_reqwest_client)
+            .app_data(stream_url_data_for_actix.clone())
+            .app_data(app_data_reqwest_client.clone())
             .wrap(actix_cors::Cors::permissive())
             .route("/live.flv", web::get().to(flv_proxy_handler))
             .route("/image", web::get().to(image_proxy_handler))
+            .route("/hls", web::get().to(hls_proxy_handler))
+            .route("/hls-seg", web::get().to(hls_seg_proxy_handler))
     })
     .keep_alive(Duration::from_secs(120))
     .bind(("127.0.0.1", port))

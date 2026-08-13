@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use crate::net_proxy::DtvProxyExt;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -106,7 +107,7 @@ pub async fn fetch_live_list(offset: u32, cate2: String, limit: u32) -> Frontend
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| e.to_string())
         .unwrap();
@@ -244,7 +245,7 @@ pub async fn fetch_live_list_for_cate3(
     let client = match reqwest::Client::builder()
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
     {
         Ok(c) => c,

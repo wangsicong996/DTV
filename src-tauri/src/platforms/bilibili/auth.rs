@@ -5,6 +5,7 @@ use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::net_proxy::DtvProxyExt;
 
 // WBI signing constants and functions (extracted)
 const MIXIN_KEY_ENC_TAB: [usize; 64] = [
@@ -86,7 +87,7 @@ fn _encode_wbi(
 fn get_wbi_keys(headers: HeaderMap) -> Result<(String, String), reqwest::Error> {
     let client = reqwest::blocking::Client::builder()
         .https_only(true)
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .unwrap();
 
@@ -118,7 +119,7 @@ pub const USER_AGENT: &str =
 pub fn init_uid(headers: HeaderMap) -> (reqwest::StatusCode, String) {
     let client = reqwest::blocking::Client::builder()
         .https_only(true)
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .unwrap();
 
@@ -149,7 +150,7 @@ pub fn init_uid(headers: HeaderMap) -> (reqwest::StatusCode, String) {
 pub fn init_host_server(headers: HeaderMap, room_id: u64) -> (reqwest::StatusCode, String) {
     let client = reqwest::blocking::Client::builder()
         .https_only(true)
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .unwrap();
 

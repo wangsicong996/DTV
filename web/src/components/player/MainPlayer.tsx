@@ -32,6 +32,7 @@ import { stopHuyaProxy } from "@/platforms/huya/playerHelper";
 import { fetchAndPrepareDouyinStreamConfig } from "@/platforms/douyin/playerHelper";
 import { getHuyaStreamConfig } from "@/platforms/huya/playerHelper";
 import { getBilibiliStreamConfig } from "@/platforms/bilibili/playerHelper";
+import { isHlsUrl, isLocalHlsProxyUrl } from "@/platforms/common/hlsProxy";
 import { useImageProxy } from "@/hooks/useImageProxy";
 import { useFollow, type FollowedStreamer, type Platform as FollowPlatform } from "@/state/follow/FollowProvider";
 import { usePlayerUi } from "@/state/playerUi/PlayerUiProvider";
@@ -86,6 +87,19 @@ function resolveStoredQuality(platform: Platform) {
     // ignore
   }
   return "原画";
+}
+
+function isNetworkHlsError(err: unknown) {
+  const hay = (() => {
+    try {
+      return JSON.stringify(err ?? {}).toLowerCase();
+    } catch {
+      return String(err || "").toLowerCase();
+    }
+  })();
+  if (!hay.trim()) return false;
+  if (hay.includes("未开播") || hay.includes("offline")) return false;
+  return /network|manifest|levelload|fragload|timeout|failed to load|loaderror|http.?[45]|status.?[45]/.test(hay);
 }
 
 function isOfflineMessage(msg: string) {
@@ -208,6 +222,11 @@ export function MainPlayer({
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<any>(null);
   const playbackKindRef = useRef<null | "hls" | "flv">(null);
+  const hlsUpstreamRef = useRef<string | null>(null);
+  const hlsLocalUrlRef = useRef<string | null>(null);
+  const hlsModeRef = useRef<"local" | "direct" | null>(null);
+  const hlsTriedRef = useRef<Set<"local" | "direct">>(new Set());
+  const hlsSwitchingRef = useRef(false);
   const danmuOverlayRef = useRef<DanmuOverlayInstance | null>(null);
   const unlistenRef = useRef<null | (() => void)>(null);
 
@@ -903,6 +922,37 @@ export function MainPlayer({
       }
       playbackKindRef.current = isHlsPlayback ? "hls" : "flv";
 
+      if (isHlsPlayback) {
+        const onHlsError = (err: unknown) => {
+          if (!isSessionActive(sessionId) || hlsSwitchingRef.current) return;
+          if (!isNetworkHlsError(err)) return;
+          const upstream = hlsUpstreamRef.current;
+          if (!upstream) return;
+          const currentMode = hlsModeRef.current || (isLocalHlsProxyUrl(url) ? "local" : "direct");
+          const nextMode: "local" | "direct" = currentMode === "local" ? "direct" : "local";
+          if (hlsTriedRef.current.has(nextMode)) {
+            setStreamError("HLS 播放失败，请检查代理或网络");
+            setIsOfflineError(false);
+            return;
+          }
+          const nextUrl = nextMode === "direct" ? upstream : hlsLocalUrlRef.current || url;
+          hlsTriedRef.current.add(nextMode);
+          hlsModeRef.current = nextMode;
+          hlsSwitchingRef.current = true;
+          window.setTimeout(() => {
+            hlsSwitchingRef.current = false;
+            if (!isSessionActive(sessionId)) return;
+            destroyPlayer();
+            void mountPlayer(sessionId, nextUrl, "hls", danmakuBackendRoomIdOverride, danmakuFilterRoomIdOverride);
+          }, 0);
+        };
+        try {
+          player.on?.("error", onHlsError);
+        } catch {
+          // ignore
+        }
+      }
+
       try {
         const storedPlayerVolume = loadStoredVolume();
         if (storedPlayerVolume !== null) {
@@ -1038,6 +1088,11 @@ export function MainPlayer({
 
       await stopAllDanmakuBackends();
       await stopAllProxies();
+      hlsUpstreamRef.current = null;
+      hlsLocalUrlRef.current = null;
+      hlsModeRef.current = null;
+      hlsTriedRef.current = new Set();
+      hlsSwitchingRef.current = false;
       if (!isSessionActive(sessionId)) return;
 
       try {
@@ -1096,6 +1151,13 @@ export function MainPlayer({
           // Douyin backend expects web_rid/live_id to bootstrap cookies, but emitted danmaku payload uses real room_id.
           const danmakuBackendRoomId = resp.webRid || roomId;
           const danmakuFilterRoomId = resp.normalizedRoomId || roomId;
+          if (resp.hlsUpstream || isHlsUrl(resp.streamUrl)) {
+            const upstream = resp.hlsUpstream || resp.streamUrl;
+            hlsUpstreamRef.current = upstream;
+            hlsLocalUrlRef.current = isLocalHlsProxyUrl(resp.streamUrl) ? resp.streamUrl : null;
+            hlsModeRef.current = isLocalHlsProxyUrl(resp.streamUrl) ? "local" : "direct";
+            hlsTriedRef.current = new Set([hlsModeRef.current]);
+          }
           const nextIsHls = (resp.streamType || "").toLowerCase() === "hls" || resp.streamUrl.toLowerCase().includes(".m3u8");
           const nextKind: "hls" | "flv" = nextIsHls ? "hls" : "flv";
           const player = playerRef.current;
@@ -1123,7 +1185,7 @@ export function MainPlayer({
           }
         } else if (platform === Platform.HUYA) {
           const resolvedLine = resolveCurrentLineFor(lineOptions, effectiveLine);
-          const { streamUrl, streamType, title, anchorName, avatar, isLive } = await getHuyaStreamConfig(
+          const { streamUrl, streamType, title, anchorName, avatar, isLive, hlsUpstream } = await getHuyaStreamConfig(
             roomId,
             effectiveQuality,
             resolvedLine
@@ -1133,6 +1195,13 @@ export function MainPlayer({
           setPlayerAnchorName(anchorName ?? null);
           setPlayerAvatar(avatar ?? null);
           setPlayerIsLive(typeof isLive === "boolean" ? isLive : true);
+          if (hlsUpstream || isHlsUrl(streamUrl)) {
+            const upstream = hlsUpstream || streamUrl;
+            hlsUpstreamRef.current = upstream;
+            hlsLocalUrlRef.current = isLocalHlsProxyUrl(streamUrl) ? streamUrl : null;
+            hlsModeRef.current = isLocalHlsProxyUrl(streamUrl) ? "local" : "direct";
+            hlsTriedRef.current = new Set([hlsModeRef.current]);
+          }
           const nextIsHls = (streamType || "").toLowerCase() === "hls" || streamUrl.toLowerCase().includes(".m3u8");
           const nextKind: "hls" | "flv" = nextIsHls ? "hls" : "flv";
           const player = playerRef.current;
@@ -1169,9 +1238,16 @@ export function MainPlayer({
           } catch {
             // ignore meta fetch failures
           }
-          const { streamUrl, streamType } = await getBilibiliStreamConfig(roomId, effectiveQuality, cookie || undefined);
+          const { streamUrl, streamType, hlsUpstream } = await getBilibiliStreamConfig(roomId, effectiveQuality, cookie || undefined);
           if (!isSessionActive(sessionId)) return;
           setPlayerIsLive(true);
+          if (hlsUpstream || isHlsUrl(streamUrl)) {
+            const upstream = hlsUpstream || streamUrl;
+            hlsUpstreamRef.current = upstream;
+            hlsLocalUrlRef.current = isLocalHlsProxyUrl(streamUrl) ? streamUrl : null;
+            hlsModeRef.current = isLocalHlsProxyUrl(streamUrl) ? "local" : "direct";
+            hlsTriedRef.current = new Set([hlsModeRef.current]);
+          }
           const nextIsHls = (streamType || "").toLowerCase() === "hls" || streamUrl.toLowerCase().includes(".m3u8");
           const nextKind: "hls" | "flv" = nextIsHls ? "hls" : "flv";
           const player = playerRef.current;

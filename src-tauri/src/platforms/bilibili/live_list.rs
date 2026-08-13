@@ -11,6 +11,7 @@ pub async fn fetch_bilibili_live_list(
     state: tauri::State<'_, BilibiliState>,
 ) -> Result<String, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
+use crate::net_proxy::DtvProxyExt;
 
     // 每次请求前都刷新一次 w_webid，避免使用过期的 ID
     let w_webid = match generate_bilibili_w_webid(state.clone()).await {
@@ -87,7 +88,7 @@ pub async fn fetch_bilibili_live_list(
         .user_agent(ua)
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 

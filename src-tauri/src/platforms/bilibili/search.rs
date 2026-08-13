@@ -3,6 +3,7 @@ use regex::Regex;
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
 use serde::Serialize;
 use serde_json::Value;
+use crate::net_proxy::DtvProxyExt;
 
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
 const LIVE_REFERER: &str = "https://live.bilibili.com/";
@@ -153,7 +154,7 @@ pub async fn search_bilibili_rooms(
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| format!("Failed to build client: {}", e))?;
 

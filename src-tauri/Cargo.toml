@@ -30,6 +30,7 @@ window-vibrancy = "0.7.1"
  regex = "1.10.4"
  tokio = { version = "1.37.0", features = ["full"] }
  tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+ tokio-socks = "0.5"
  url = "2.4"
  openssl-sys = { version = "0.9", features = ["vendored"] }
  native-tls = "0.2"
@@ -38,7 +39,7 @@ window-vibrancy = "0.7.1"
  urlencoding = "2.1.0"
  percent-encoding = "2.1"
  serde_urlencoded = "0.7"
- reqwest = { version = "0.11", features = ["json", "stream", "cookies", "brotli", "gzip", "blocking"] }
+ reqwest = { version = "0.11", features = ["json", "stream", "cookies", "brotli", "gzip", "blocking", "socks"] }
  actix-web = "4"
  actix-cors = "0.7"
  awc = { version = "3.4.0", features = ["tls-rustls-0_22"] }

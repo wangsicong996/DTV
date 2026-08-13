@@ -5,12 +5,13 @@ import type { Ref } from '../common/ref';
 import type { DanmakuMessage, DanmuOverlayInstance, DanmuRenderOptions } from '../../components/player/types';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '@/utils/logger';
+import { isHlsUrl, wrapHlsPlayUrl } from '../common/hlsProxy';
 
 export async function getBilibiliStreamConfig(
   roomId: string,
   quality: string = '原画',
   cookie?: string,
-): Promise<{ streamUrl: string, streamType: string | undefined }> {
+): Promise<{ streamUrl: string, streamType: string | undefined, hlsUpstream?: string }> {
   if (!roomId) {
     throw new Error('房间ID未提供');
   }
@@ -133,6 +134,12 @@ export async function getBilibiliStreamConfig(
 
   if (!streamType) {
     streamType = 'flv';
+  }
+
+  if (streamType === 'hls' || isHlsUrl(streamUrl) || isHlsUrl(result.upstream_url)) {
+    const upstream = result.upstream_url || streamUrl;
+    const wrapped = await wrapHlsPlayUrl(upstream);
+    return { streamUrl: wrapped.playUrl, streamType: 'hls', hlsUpstream: wrapped.upstream };
   }
 
   return { streamUrl, streamType };

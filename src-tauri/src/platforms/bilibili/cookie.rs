@@ -147,7 +147,7 @@ pub async fn bootstrap_bilibili_cookie(
 
     let parsed_url = Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
 
-    tauri::WebviewWindowBuilder::new(
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app_handle,
         label.clone(),
         WebviewUrl::External(parsed_url.clone()),
@@ -155,9 +155,11 @@ pub async fn bootstrap_bilibili_cookie(
     .visible(false)
     .resizable(false)
     .focused(false)
-    .decorations(false)
-    .build()
-    .map_err(|e| format!("Failed to open silent window: {}", e))?;
+    .decorations(false);
+    builder = apply_webview_proxy(builder, "local")?;
+    builder
+        .build()
+        .map_err(|e| format!("Failed to open silent window: {}", e))?;
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -169,4 +171,95 @@ pub async fn bootstrap_bilibili_cookie(
     }
 
     Ok(result)
+}
+
+const BILIBILI_LOGIN_LABEL: &str = "bilibili-login";
+const BILIBILI_LOGIN_URL: &str = "https://passport.bilibili.com/login";
+
+fn apply_webview_proxy<'a, R, M>(
+    builder: tauri::WebviewWindowBuilder<'a, R, M>,
+    mode: &str,
+) -> Result<tauri::WebviewWindowBuilder<'a, R, M>, String>
+where
+    R: tauri::Runtime,
+    M: tauri::Manager<R>,
+{
+    let proxy = match mode {
+        "local" => crate::net_proxy::webview_proxy_url(),
+        "native" => crate::net_proxy::raw_url().map(|raw| {
+            if raw.starts_with("socks://") {
+                raw.replacen("socks://", "socks5://", 1)
+            } else {
+                raw
+            }
+        }),
+        _ => None,
+    };
+    if let Some(proxy) = proxy {
+        let parsed = Url::parse(&proxy).map_err(|e| format!("Invalid proxy url: {e}"))?;
+        Ok(builder.proxy_url(parsed))
+    } else {
+        Ok(builder)
+    }
+}
+
+fn build_bilibili_login_window(app_handle: &AppHandle, mode: &str) -> Result<(), String> {
+    let parsed_url =
+        Url::parse(BILIBILI_LOGIN_URL).map_err(|e| format!("Invalid login URL: {e}"))?;
+    let builder = tauri::WebviewWindowBuilder::new(
+        app_handle,
+        BILIBILI_LOGIN_LABEL,
+        WebviewUrl::External(parsed_url),
+    )
+    .title("B站登录")
+    .inner_size(420.0, 640.0)
+    .resizable(true)
+    .focused(true)
+    .fullscreen(false);
+    apply_webview_proxy(builder, mode)?
+        .build()
+        .map_err(|e| format!("Failed to open login window ({mode}): {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_bilibili_login_window(app_handle: AppHandle) -> Result<String, String> {
+    if let Some(existing) = app_handle.get_webview_window(BILIBILI_LOGIN_LABEL) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(BILIBILI_LOGIN_LABEL.to_string());
+    }
+
+    let mut modes: Vec<&str> = Vec::new();
+    if crate::net_proxy::webview_proxy_url().is_some() {
+        modes.push("local");
+    }
+    if crate::net_proxy::raw_url().is_some() {
+        modes.push("native");
+    }
+    if crate::net_proxy::webview_proxy_url().is_some() {
+        modes.push("local");
+    }
+    if modes.is_empty() {
+        modes.push("none");
+    }
+
+    let mut last_err = "创建登录窗口失败".to_string();
+    for mode in modes {
+        if let Some(existing) = app_handle.get_webview_window(BILIBILI_LOGIN_LABEL) {
+            let _ = existing.close();
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        match build_bilibili_login_window(&app_handle, mode) {
+            Ok(()) => return Ok(BILIBILI_LOGIN_LABEL.to_string()),
+            Err(err) => {
+                eprintln!("[bilibili-login] {err}");
+                last_err = err;
+            }
+        }
+    }
+
+    Err(format!(
+        "{last_err}。请检查 --proxy-server / DTV_PROXY 是否可用"
+    ))
 }

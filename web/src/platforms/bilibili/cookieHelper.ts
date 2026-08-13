@@ -61,47 +61,20 @@ export const ensureBilibiliCookieBootstrap = async (): Promise<BilibiliCookieRes
 };
 
 export const ensureBilibiliLoginWindow = async (): Promise<WebviewWindow> => {
+  await invoke<string>('open_bilibili_login_window');
+
   const existing = await WebviewWindow.getByLabel(BILIBILI_LOGIN_WINDOW_LABEL);
   if (existing) {
     try {
       await existing.show();
       await existing.setFocus();
     } catch (e) {
-      console.warn('[BilibiliCookie] Failed to focus existing login window:', e);
+      console.warn('[BilibiliCookie] Failed to focus login window:', e);
     }
     return existing;
   }
 
-  const loginWindow = new WebviewWindow(BILIBILI_LOGIN_WINDOW_LABEL, {
-    url: BILIBILI_LOGIN_URL,
-    title: 'B站登录',
-    width: 420,
-    height: 640,
-    resizable: true,
-    focus: true,
-    fullscreen: false,
-    alwaysOnTop: false,
-  });
-
-  await Promise.race([
-    new Promise<void>((resolve) => {
-      loginWindow.once('tauri://created', () => resolve());
-    }),
-    new Promise<void>((_, reject) => {
-      loginWindow.once('tauri://error', (event) => {
-        reject(new Error(String(event.payload ?? '创建登录窗口失败')));
-      });
-    }),
-  ]);
-
-  try {
-    await loginWindow.show();
-    await loginWindow.setFocus();
-  } catch (e) {
-    console.warn('[BilibiliCookie] Unable to show or focus login window:', e);
-  }
-
-  return loginWindow;
+  throw new Error('创建登录窗口失败');
 };
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

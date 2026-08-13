@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
-use tokio_tungstenite::{connect_async, MaybeTlsStream};
+use tokio_tungstenite::MaybeTlsStream;
 use urlencoding;
 // use url::Url; // REMOVED AGAIN
 // use rand::Rng; // REMOVED AGAIN
@@ -160,7 +160,7 @@ pub async fn connect_and_manage_websocket(
         headers.insert("Cookie", ws_cookie_header.parse()?);
 
         debug!("[Douyin Danmaku] Trying WebSocket host: {}", host);
-        match timeout(Duration::from_secs(12), connect_async(client_request)).await {
+        match timeout(Duration::from_secs(12), crate::net_proxy::connect_ws(client_request)).await {
             Ok(Ok((ws_stream, _response))) => {
                 debug!("[Douyin Danmaku] WebSocket connected via host: {}", host);
                 connected = Some(ws_stream);

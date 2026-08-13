@@ -319,8 +319,13 @@ pub fn connect(v: Value) -> WebSocket<TlsStream<TcpStream>> {
     let danmu_server = gen_damu_list(&v);
     let (host, url, ws_url) = find_server(danmu_server);
     ws_debug!("[websocket] connecting tcp {} and ws {}", url, ws_url);
+    let port = url
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(443);
     let connector: native_tls::TlsConnector = native_tls::TlsConnector::new().unwrap();
-    let stream: TcpStream = TcpStream::connect(url).unwrap();
+    let stream: TcpStream = crate::net_proxy::connect_tcp_sync(&host, port).unwrap();
     let stream: native_tls::TlsStream<TcpStream> =
         connector.connect(host.as_str(), stream).unwrap();
     let (socket, _resp) =

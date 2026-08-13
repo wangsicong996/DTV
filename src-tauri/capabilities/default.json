@@ -3,7 +3,9 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": [
-    "main"
+    "main",
+    "bilibili-login",
+    "bilibili-silent-bootstrap"
   ],
   "permissions": [
     "core:default",
@@ -16,6 +18,8 @@
     "core:window:allow-unmaximize",
     "core:window:allow-close",
     "core:webview:allow-create-webview-window",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "os:default"
   ]
 }

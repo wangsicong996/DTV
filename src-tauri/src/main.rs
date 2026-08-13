@@ -17,6 +17,7 @@ mod sync_transfer;
 mod platforms;
 mod proxy;
 mod version_check;
+mod net_proxy;
 use platforms::common::{DouyinDanmakuState, FollowHttpClient, HuyaDanmakuState};
 use platforms::douyin::danmu::signature::generate_douyin_ms_token;
 use platforms::douyin::fetch_douyin_partition_rooms;
@@ -176,16 +177,18 @@ fn open_in_default_browser(app: tauri::AppHandle, url: String) -> Result<(), Str
 // Main function corrected
 fn main() {
     logging::init();
+    net_proxy::init();
     panic::set_hook(Box::new(|info| {
         eprintln!("[panic] {}", info);
     }));
     // Create a new HTTP client instance to be managed by Tauri
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        .http1_only()
-        .connect_timeout(Duration::from_secs(15))
-        .no_proxy()
-        .timeout(Duration::from_secs(45))
+    let client = crate::net_proxy::apply(
+        reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            .http1_only()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(45))
+    )
         .build()
         .expect("Failed to create reqwest client");
     let follow_http_client = FollowHttpClient::new().expect("Failed to create follow http client");
@@ -201,6 +204,9 @@ fn main() {
                 )
                 .build())
             .setup(|_app| {
+                if let Some(proxy) = crate::net_proxy::webview_proxy_url() {
+                    eprintln!("[net_proxy] main webview proxy {proxy}");
+                }
                 // Apply macOS vibrancy to the main window when running on macOS
                 #[cfg(target_os = "macos")]
                 {
@@ -272,6 +278,7 @@ fn main() {
                 platforms::bilibili::streamer_info::fetch_bilibili_streamer_info,
                 platforms::bilibili::cookie::get_bilibili_cookie,
                 platforms::bilibili::cookie::bootstrap_bilibili_cookie,
+                platforms::bilibili::cookie::open_bilibili_login_window,
                 platforms::bilibili::search::search_bilibili_rooms,
                 platforms::huya::search::search_huya_anchors,
                 open_in_default_browser,

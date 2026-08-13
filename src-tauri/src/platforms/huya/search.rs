@@ -2,6 +2,7 @@ use reqwest::header::{
     HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, ORIGIN, REFERER, USER_AGENT,
 };
 use serde::Serialize;
+use crate::net_proxy::DtvProxyExt;
 
 #[derive(Debug, Serialize)]
 pub struct HuyaAnchorItem {
@@ -20,7 +21,7 @@ pub async fn search_huya_anchors(
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let url = "https://search.cdn.huya.com/";

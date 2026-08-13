@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
 pub struct DanmakuClient {
@@ -54,7 +54,7 @@ impl DanmakuClient {
             .headers_mut()
             .insert("Sec-WebSocket-Protocol", "binary".parse()?);
 
-        let (ws_stream, _) = connect_async_tls_with_config(request, None, false, None).await?;
+        let (ws_stream, _) = crate::net_proxy::connect_ws(request).await?;
 
         let (mut write, mut read) = ws_stream.split();
 

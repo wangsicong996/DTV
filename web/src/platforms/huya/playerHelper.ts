@@ -4,6 +4,7 @@ import type { Ref } from '../common/ref';
 import type { DanmakuMessage, DanmuOverlayInstance, DanmuRenderOptions } from '../../components/player/types';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '@/utils/logger';
+import { isHlsUrl, wrapHlsPlayUrl } from '../common/hlsProxy';
 
 export interface HuyaUnifiedEntry { quality: string; bitRate: number; url: string; }
 
@@ -20,6 +21,7 @@ export async function getHuyaStreamConfig(
   anchorName?: string | null;
   avatar?: string | null;
   isLive?: boolean | null;
+  hlsUpstream?: string;
 }> {
   logger.debug('[HuyaPlayerHelper] getHuyaStreamConfig', { roomId, quality, line });
   const MAX_ATTEMPTS = 2; // 最多重试一次
@@ -36,17 +38,22 @@ export async function getHuyaStreamConfig(
         const sanitizedUpstream = enforceHttps(upstreamStreamUrl);
         const streamType = inferStreamType(sanitizedUpstream);
 
-        // 对齐 pure_live：虎牙播放需要稳定的 UA/Referer/Origin；WebView 无法给 FLV 请求加自定义 Header，走本地 proxy 注入。
         let finalStreamUrl = sanitizedUpstream;
+        let hlsUpstream: string | undefined;
         try {
-          await invoke('set_stream_url_cmd', { url: sanitizedUpstream });
-          const proxyUrl = await invoke<string>('start_proxy');
-          if (proxyUrl) {
-            finalStreamUrl = proxyUrl;
-            huyaProxyActive = true;
+          if (streamType === 'hls' || isHlsUrl(sanitizedUpstream)) {
+            const wrapped = await wrapHlsPlayUrl(sanitizedUpstream);
+            finalStreamUrl = wrapped.playUrl;
+            hlsUpstream = wrapped.upstream;
+          } else {
+            await invoke('set_stream_url_cmd', { url: sanitizedUpstream });
+            const proxyUrl = await invoke<string>('start_proxy');
+            if (proxyUrl) {
+              finalStreamUrl = proxyUrl;
+              huyaProxyActive = true;
+            }
           }
         } catch {
-          // proxy 非关键：失败则回退直连（避免阻断播放），但可能更容易断流
           huyaProxyActive = false;
         }
 
@@ -57,6 +64,7 @@ export async function getHuyaStreamConfig(
           anchorName: result?.nick ?? null,
           avatar: result?.avatar ?? null,
           isLive: typeof result?.is_live === 'boolean' ? result.is_live : null,
+          hlsUpstream,
         };
       }
 

@@ -1,14 +1,8 @@
 <div align="center">
   <img src="images/icon.png" alt="DTV" width="128">
   <h1>DTV</h1>
-  <p>基于 Tauri 2.0 的跨平台斗鱼、虎牙、抖音、bilibili直播桌面客户端</p>
+  <p>基于 Tauri 2.0 的 Linux 斗鱼、虎牙、抖音、bilibili 直播桌面客户端</p>
 </div>
-
-<p align="center">
-  <a href="https://apps.microsoft.com/detail/9mt8kdt169xf?referrer=appbadge&mode=direct">
-    <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download DTV from Microsoft Store">
-  </a>
-</p>
 
 ## 说明
 
@@ -16,9 +10,10 @@
 > 安卓版本：[`dtv_mobile`](https://github.com/chen-zeong/dtv_mobile)
 
 1. 本项目基于 Tauri 2.0 开发，体积小，占用率低，实测可以在双核、4GB内存的电脑上流畅运行
-2. 平台接口可能有访问频率限制，过于频繁的请求会触发验证码校验，建议合理使用搜索功能
-3. 本项目仅供学习编程目的使用，未进行任何逆向工程
-4. 本项目所有的直播版权都归属各个平台
+2. 当前只维护 Linux `.deb` 包（以及可直接运行的 `dtv` 二进制）
+3. 平台接口可能有访问频率限制，过于频繁的请求会触发验证码校验，建议合理使用搜索功能
+4. 本项目仅供学习编程目的使用，未进行任何逆向工程
+5. 本项目所有的直播版权都归属各个平台
 
 ### 支持平台
 
@@ -35,7 +30,8 @@
 - 💬 弹幕显示：实时显示直播间弹幕，只显示聊天弹幕，不显示礼物等其他类型弹幕
 - ⭐ 主播收藏：支持收藏喜欢的主播，支持收藏列表手动拖拽排序
 - 🔁 数据同步：支持局域网一键同步或者json文件手动同步，可以与桌面端或者移动端同步数据
-- 📋 支持平台：Mac(Intel+Arm)，Windows(Win7需要自行安装Webview2)，Linux(包括Ubuntu和各类发行版)
+- 📋 系统支持：Linux（deb）
+- 🛡️ 代理：支持 HTTP / SOCKS5（`DTV_PROXY` 或 `--proxy-server`）
 - 🌓 主题切换：支持明暗主题切换
 
 ## 软件截图
@@ -65,16 +61,32 @@
 
 ## 安装方式
 
-可以在 [release](https://github.com/chen-zeong/dtv/releases) 目录下载对应系统的安装包, 也可以通过源码编译安装
+GitHub Actions 会编译 Linux `.deb` 和 `dtv` 二进制，产物挂在对应 workflow 的 Artifacts 下，不再发布 Release。
+
+也可以通过源码编译安装。若已有 Flatpak 的 Tauri 运行环境，解压后直接运行 `dtv` 二进制即可。
+
+## 代理
+
+本机 `127.0.0.1` / `localhost` / 局域网地址不进代理。
+
+```bash
+# 开发
+DTV_PROXY=socks5://127.0.0.1:1080 pnpm tauri dev
+# 或
+pnpm tauri dev -- --proxy-server=socks5://127.0.0.1:1080
+
+# 也支持 HTTP 代理
+pnpm tauri dev -- --proxy-server=http://127.0.0.1:8080
+
+# 直接跑二进制
+DTV_PROXY=socks5://127.0.0.1:1080 ./dtv
+./dtv --proxy-server=http://127.0.0.1:8080
+```
 
 ## 编译
 
 ```bash
-安装protobuf
-
-# 克隆项目
-git clone https://github.com/c-zeong/dtv.git
-cd dtv
+# 安装 protobuf、WebKitGTK 等系统依赖后再编译
 
 # 安装依赖
 pnpm install
@@ -82,11 +94,8 @@ pnpm install
 # 开发调试
 pnpm tauri dev
 
-# 打包构建
-pnpm tauri build      # 构建当前系统的安装包
-
-# 打包 ARM64 版本（Intel Mac 上交叉编译）
-pnpm tauri build --target aarch64-apple-darwin
+# 打包 Linux deb
+pnpm tauri build
 ```
 
 ## 参考

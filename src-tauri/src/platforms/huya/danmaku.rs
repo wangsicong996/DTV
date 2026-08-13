@@ -4,7 +4,8 @@ use tars_stream::prelude::*;
 use tauri::Emitter;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{sleep, Duration};
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use crate::net_proxy::DtvProxyExt;
 
 const WS_URL: &str = "wss://cdnws.api.huya.com";
 // 恢复 HEARTBEAT 常量（被误删），供心跳发送使用
@@ -27,7 +28,7 @@ async fn fetch_huya_ids(room_id: &str) -> Result<(i64, i64), String> {
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
@@ -147,7 +148,7 @@ pub async fn start_huya_danmaku_listener(
                 );
 
                 info!("[Huya Danmaku] connecting to {}", ws_url);
-                let (ws_stream, _) = connect_async(&ws_url).await?;
+                let (ws_stream, _) = crate::net_proxy::connect_ws(&ws_url).await?;
 
                 let (mut ws_write, mut ws_read) = ws_stream.split();
                 ws_write.send(WsMessage::Binary(reg_data)).await?;
@@ -355,7 +356,7 @@ async fn get_ws_info_tars(room_id_or_url: &str) -> Result<(String, Vec<u8>), Str
     let client = reqwest::Client::builder()
         .http1_only()
         .connect_timeout(Duration::from_secs(15))
-        .no_proxy()
+        .dtv_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp_text = client
